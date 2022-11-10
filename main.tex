@@ -99,27 +99,28 @@ i due metodi utili al fine di raggiungere i business requirements:
 Uno snippet di codice molto ad alto livello che utilizza la gerarchia di cui
 sopra è il seguente:
 \begin{lstlisting}
-localService = concreteLocalService(...)
-cloudService = concreteCloudService(...)
-serviceWrapper = concreteSeriveWrapper(localService, cloudService)
-serviceWrapper.copyFromCloudToLocal(...)
+cloudService = ConcreteCloudService()
+cloudService.connect("mysql://root:password@127.0.0.1:3306/public")
+print("CloudService connected")
+
+localService = ConcreteLocalService()
+localService.connect("postgres://root:password@127.0.0.1:5432/public")
+print("LocalService connected")
+
+concreteServiceWrapper = ConcreteServiceWrapper(cloudService, localService)    
+concreteServiceWrapper.copyFromCloudToLocal("cloudTable", "localTable", ("timestamp", ">", "2022-11-10 09:55:45"))
 \end{lstlisting}
 Nella chiamata \texttt{serviceWrapper.copyFromCloudToLocal(...)}:
 \begin{lstlisting}
-def copyFromCloudToLocal(...):
-    res = cloudService.read_data(...)
-    localService.write_data(res)
+def copyFromCloudToLocal(self, cloudTable, localTable, timestamp):
+    data = self.cloudService.read_data(cloudTable, timestamp)
+    for d in data:
+        self.localService.write_data(localTable, d)
 \end{lstlisting}
 Così facendo le classi concrete per il servizio locale e cloud possono essere
 qualsiasi; non ci interessa su che DBMS si basano i due servizi, ci basta
 implementare un metodo \texttt{read} e un metodo \texttt{write} coerente alla
-tecnologia utilizzata. Possibili parametri per il metodo \texttt{read} (e
-di conseguenza per \texttt{write}) potrebbero essere:
-\begin{lstlisting}
-def copyFromCloudToLocal(...):
-    res = cloudService.read_data(table, timestamp)
-    localService.write_data(table, res)
-\end{lstlisting}
+tecnologia utilizzata.
 Così facendo permetteremmo la lettura delle righe di una specifica tabella che
 hanno un timestamp consono, e la scrittura nella corrispondente tabella locale.
 
@@ -127,55 +128,69 @@ Consideriamo l'implementazione della seguente classe:
 % \newpage
 
 \begin{lstlisting}
-    select = {
-        "exists": "",
-        "columns": [],
-        "from": "",
-        ...
-        "where": "",
-        "groupBy": [],
-        ...
-    }
+select = {
+    "exists": "",
+	"columns": [],
+	"from": "",
+	"subQuery": "",
+	"fromAlias": "",
+	"joins": [],
+	"where": "",
+	"groupBy": [],
+	"orderBy": [],
+	"limit": "",
+	"offset": "",
+    "insertvalue": ""
+}
 
-    class QueryBuilder():
+class QueryBuilder():
 
-        def __init__(self):
-            self.query = ""
-            self.selectdict = select.copy()
-
-        def columns(self, columns):
-            self.selectdict["columns"] = columns
-
-        def from_table(self, table):
-            self.selectdict["from"] = table
-
-        def where(self, selectdict: dict, where):
-            self.selectdict["where"] = where
-
-        def build_select(self):
-            self.query = ""
-            if len(self.selectdict["columns"]) > 0:
-                self.query = "SELECT " + ', '.join(self.selectdict["columns"])
-            ...
-            return self.query
+    def __init__(self):
+        self.query = ""
+        self.selectdict = select.copy()
+    
+    def columns(self, columns):
+        self.selectdict["columns"] = columns
+    
+    def from_table(self, table):
+        self.selectdict["from"] = table
+    
+    def where(self, where):
+        self.selectdict["where"] = where
+    
+    def value(self, value):
+        self.selectdict["insertvalue"] = value
+        
+    def build_select(self):
+        self.query = ""
+        if len(self.selectdict["columns"]) > 0:
+            self.query = "SELECT " + ', '.join(self.selectdict["columns"])
+        if self.selectdict["from"]:
+            self.query += " FROM " + self.selectdict["from"]
+        if self.selectdict["where"]:
+            self.query += " WHERE " + " ".join([self.selectdict["where"][0],self.selectdict["where"][1],"'" + self.selectdict["where"][2] + "'"])
+        return self.query
+    
+    ...
 \end{lstlisting}
 Come è facile intuire la classe descritta permette di creare query arbitrarie:
 potremmo quindi utilizzarla per costruire quelle che verranno utilizzate nei
 metodi \texttt{read\_data()} e \texttt{write\_data()} delle due classi
 descritte sopra, ad esempio:
 \begin{lstlisting}
-    def read_data(table, timestamp):
-        builder = QueryBuilder()
-        builder.from_table("prova")
-        builder.where("timestamp_column > " + timestamp)
-        self.engine.execute(builder.build_select())
+    def read_data(self, table, timestamp):
+        qb = QueryBuilder()
+        qb.columns(['*'])
+        qb.from_table(table)
+        if timestamp != "":
+            qb.where(timestamp)
+        return self.conn.execute(qb.build_select())
 \end{lstlisting}
 \texttt{engine} è ottenuto utilizzando il metodo \texttt{connect} nel seguente
 modo:
 \begin{lstlisting}
-    def connect(self, url):
-        self.engine = create_engine(url)
-        return
+    def connect(self, connString):
+        self.conn = create_engine(connString)
 \end{lstlisting}
 Usando ad esempio \texttt{sqlAlchemy}, \texttt{url} può essere una stringa del
 tipo:
